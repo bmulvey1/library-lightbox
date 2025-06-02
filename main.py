@@ -1,3 +1,5 @@
+# pylint: disable=C0114,C0115,R0903
+
 # 256 ────────────────┐241
 # 225┌────────────────┘240
 # 224└────────────────┐209
@@ -15,6 +17,9 @@
 # 032└────────────────┐016
 # 000 ────────────────┘015
 
+# >>> dir(board)
+# ['__class__', '__name__', 'A0', 'A1', 'A2', 'A3', 'GP0', 'GP1', 'GP10', 'GP11', 'GP12', 'GP13', 'GP14', 'GP15', 'GP16', 'GP17', 'GP18', 'GP19', 'GP2', 'GP20', 'GP21', 'GP22', 'GP23', 'GP24', 'GP25', 'GP26', 'GP26_A0', 'GP27', 'GP27_A1', 'GP28', 'GP28_A2', 'GP3', 'GP4', 'GP5', 'GP6', 'GP7', 'GP8', 'GP9', 'LED', 'SMPS_MODE', 'STEMMA_I2C', 'VBUS_SENSE', 'VOLTAGE_MONITOR', '__dict__', 'board_id']
+
 import time
 import board
 import audiomp3
@@ -22,9 +27,10 @@ import audiopwmio
 import digitalio
 import neopixel
 import neomatrix
+import keypad
 
 
-class Colors:
+class Color:
     OFF = 0x000000
     RED = 0xff0000
     ORANGE = 0xff1e00
@@ -32,18 +38,25 @@ class Colors:
     GREEN = 0x00ff00
     BLUE = 0x0000ff
     PURPLE = 0x7f00ff
-  
-class State:
-    standby = 0
-    spiral = 1
-    attract = 2
-    attract_silent = 3
-    
-PIXEL_PIN = board.IO1  # temp
-ACC_BUTTON_PIN = board.IO2 # temp
-BIG_BUTTON_PIN = board.IO3 # temp
-AUDIO_PIN = board.IO4 # temp
 
+
+class State:
+    STANDBY = 0
+    SPIRAL = 1
+    ATTRACT = 2
+    ATTRACT_SILENT = 3
+
+
+PIXEL_PIN = board.GP27
+ACC_BUTTON_PIN = board.GP15
+BIG_BUTTON_PIN = board.GP26
+AUDIO_PIN = board.GP20
+
+keys = keypad.keys((ACC_BUTTON_PIN, BIG_BUTTON_PIN),
+                   value_when_pressed=True, pull=True)
+
+KEY_ACC = 0
+KEY_BBUTTON = 1
 
 ROWS = 16
 COLS = 16
@@ -58,50 +71,39 @@ matrixType = (neomatrix.NEO_MATRIX_BOTTOM, neomatrix.NEO_MATRIX_LEFT,
 
 matrix = neomatrix.NeoMatrix(pixels, ROWS, COLS, 1, 1, matrixType, rotation=0)
 
-
-acc_button = digitalio.DigitalInOut(ACC_BUTTON_PIN)
-acc_button.direction = digitalio.Direction.INPUT
-acc_button.pull = digitalio.Pull.UP
-
-big_button = digitalio.DigitalInOut(BIG_BUTTON_PIN)
-big_button.direction = digitalio.Direction.INPUT
-big_button.pull = digitalio.Pull.UP
-
 audio = audiopwmio.PWMAudioOut(AUDIO_PIN)
 
-state = State.standby
-
-big_button_last_pressed = 1
+state = State.STANDBY
 
 while 1:
 
-    if not acc_button.value:
+    event = keys.events.get()
+
+    if event.pressed & event.key_number == KEY_ACC:
         # accessory button pressed
-        if state == State.attract_silent:
-            state = State.standby
+        if state == State.ATTRACT_SILENT:
+            state = State.STANDBY
+        elif state == State.STANDBY:
+            state = State.ATTRACT
         else:
             state = state + 1
 
-    if state == State.standby:
-        matrix.fill(Colors.OFF)
+    if state == State.STANDBY:
+        matrix.fill(Color.OFF)
         audio.stop()
 
-    elif state == State.spiral:
+    elif state == State.SPIRAL:
         pass
 
-    elif state == State.attract:
-        # only trip on 0-to-1
-        if big_button_last_pressed == 1 and big_button.value ==  0:
-            state = State.spiral
+    elif state == State.ATTRACT:
+        if event.pressed & event.key_number == KEY_BBUTTON:
+            state = State.SPIRAL
 
-    elif state == State.attract_silent:
-        # only trip on 0-to-1
-        if big_button_last_pressed == 1 and big_button.value ==  0:
-            state = State.spiral
+    elif state == State.ATTRACT_SILENT:
+        if event.pressed & event.key_number == KEY_BBUTTON:
+            state = State.SPIRAL
 
     else:
-        state = State.standby
-
-    big_button_last_pressed = big_button.value
+        state = State.STANDBY
 
     continue
