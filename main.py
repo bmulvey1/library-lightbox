@@ -100,8 +100,10 @@ current_fade_percentage = 0
 fade_percentage_increment = 0.02
 reverse_fade = False
 
+
 def set_brightness(color, brightness):
     return round((color >> 16) * brightness) << 16 | round(((color >> 8) & 0xFF) * brightness) << 8 | round((color & 0xFF) * brightness)
+
 
 while 1:
 
@@ -201,17 +203,19 @@ while 1:
         # select random x, y, color
         if select_new_flash:
             coords = (random.randint(2, ROWS-2), random.randint(2, COLS-2))
-            fade_size = random.randint(0,2)
+            fade_size = random.randint(0, 2)
             fade_color = colors[random.randint(1, 6)]
             current_fade_percentage = 0
             reverse_fade = False
-            fade_pixels = list((range(coords[0] - fade_size, coords[0] + fade_size), range(coords[1] - fade_size, coords[1] + fade_size)))
+            fade_pixels = list((range(coords[0] - fade_size, coords[0] + fade_size), range(
+                coords[1] - fade_size, coords[1] + fade_size)))
 
         # fade in and out over ATTRACT_FADE_TIME seconds
 
         for x in fade_pixels[0]:
             for y in fade_pixels[1]:
-                matrix.pixel(x, y, set_brightness(fade_color, current_fade_percentage))
+                matrix.pixel(x, y, set_brightness(
+                    fade_color, current_fade_percentage))
 
         if current_fade_percentage < 1:
             current_fade_percentage += fade_percentage_increment
@@ -229,6 +233,34 @@ while 1:
     elif state == State.ATTRACT_SILENT:
         if event.pressed & event.key_number == KEY_BBUTTON:
             state = State.SPIRAL
+        if select_new_flash:
+            coords = (random.randint(2, ROWS-2), random.randint(2, COLS-2))
+            fade_size = random.randint(0, 2)
+            fade_color = colors[random.randint(1, 6)]
+            current_fade_percentage = 0
+            reverse_fade = False
+            fade_pixels = list((range(coords[0] - fade_size, coords[0] + fade_size), range(
+                coords[1] - fade_size, coords[1] + fade_size)))
+
+        # fade in and out over ATTRACT_FADE_TIME seconds
+
+        for x in fade_pixels[0]:
+            for y in fade_pixels[1]:
+                matrix.pixel(x, y, set_brightness(
+                    fade_color, current_fade_percentage))
+
+        if current_fade_percentage < 1:
+            current_fade_percentage += fade_percentage_increment
+        elif current_fade_percentage == 1:
+            reverse_fade = True
+            fade_percentage_increment = -fade_percentage_increment
+
+        if reverse_fade and current_fade_percentage == 0:
+            reverse_fade = False
+            fade_percentage_increment = -fade_percentage_increment
+            select_new_flash = True
+
+        time.sleep(ATTRACT_FADE_TIME / 100)
 
     else:
         state = State.STANDBY
