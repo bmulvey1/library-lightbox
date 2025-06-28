@@ -1,4 +1,4 @@
-# pylint: disable=C0114,C0115,C0116,R0903,C0200,C0103
+# pylint: disable=C0114,C0115,C0116,R0903,C0200,C0103,W0603,W0702
 
 # 256 ────────────────┐241
 # 225┌────────────────┘240
@@ -34,6 +34,13 @@ import digitalio
 import neopixel
 import neomatrix
 import keypad
+import supervisor
+from adafruit_itertools import product
+
+
+TICKS_PERIOD = 1 << 29  # supervisor.ticks_ms() overflows after 2^29 ms
+TICKS_MAX = TICKS_PERIOD - 1
+TICKS_HALFPERIOD = int(TICKS_PERIOD / 2)
 
 
 class Color:
@@ -55,24 +62,23 @@ class State:
     SPIRAL = 1
     SPIRAL_END = 2
     ATTRACT = 3
-    ATTRACT_SILENT = 4
 
 
-SPIRAL_TIME = 0.02  # 20 ms / px = 5.12 sec to finish spiral
+SPIRAL_TIME = 0.01
 SPIRAL_EXPAND_TIME = 0.2
 
 ATTRACT_FADE_TIME = 3
 
 VBUS_PIN = board.VBUS_SENSE
-PIXEL_PIN = board.GP27
-ACC_BUTTON_PIN = board.GP15
-BIG_BUTTON_PIN = board.GP26
-AUDIO_PIN = board.GP20
+PIXEL_PIN = board.GP26
+ACC_BUTTON_PIN = board.GP16
+BIG_BUTTON_PIN = board.GP27
+AUDIO_PIN = board.GP19
 
 USB_CONNECTED = digitalio.DigitalInOut(VBUS_PIN).value
 
-keys = keypad.keys((ACC_BUTTON_PIN, BIG_BUTTON_PIN),
-                   value_when_pressed=True, pull=True)
+keys = keypad.Keys((ACC_BUTTON_PIN, BIG_BUTTON_PIN),
+                   value_when_pressed=False, pull=True)
 
 KEY_ACC = 0
 KEY_BBUTTON = 1
@@ -81,7 +87,7 @@ ROWS = 16
 COLS = 16
 NUM_PIXELS = ROWS*COLS
 # keep brightness low if usb connected to avoid overloading port
-BRIGHTNESS = 0.5 if not USB_CONNECTED else 0.01
+BRIGHTNESS = 0.4 if not USB_CONNECTED else 0.01
 
 pixels = neopixel.NeoPixel(
     PIXEL_PIN, NUM_PIXELS, pixel_order=neopixel.GRB, brightness=BRIGHTNESS, auto_write=False)
@@ -95,10 +101,40 @@ audio = audiopwmio.PWMAudioOut(AUDIO_PIN)
 
 state = State.STANDBY
 
-select_new_flash = False
+just_went_standby = True
+
+select_new_flash = True
 current_fade_percentage = 0
-fade_percentage_increment = 0.02
+fade_percentage_increment = 2
 reverse_fade = False
+
+spiral_timeout = -1
+next_fade_update = -1
+
+
+def reset_fade():
+    global select_new_flash
+    global current_fade_percentage
+    global fade_percentage_increment
+    global reverse_fade
+    select_new_flash = True
+    current_fade_percentage = 0
+    fade_percentage_increment = 2
+    reverse_fade = False
+
+
+def ticks_add(ticks, delta):
+    return (ticks + delta) % TICKS_PERIOD
+
+
+def ticks_diff(ticks1, ticks2):
+    diff = (ticks1 - ticks2) & TICKS_MAX
+    diff = ((diff + TICKS_HALFPERIOD) & TICKS_MAX) - TICKS_HALFPERIOD
+    return diff
+
+
+def ticks_less(ticks1, ticks2):
+    return ticks_diff(ticks1, ticks2) < 0
 
 
 def set_brightness(color, brightness):
@@ -109,33 +145,51 @@ while 1:
 
     event = keys.events.get()
 
-    if event.pressed & event.key_number == KEY_ACC:
-        # accessory button pressed
-        if state == State.ATTRACT_SILENT:
-            state = State.STANDBY
-        elif state == State.STANDBY:
-            state = State.ATTRACT
-        else:
-            state = state + 1
+    if event:
+        print(event)
 
-    if state == State.STANDBY:
+        if (event.pressed) & (event.key_number == KEY_ACC):
+            # accessory button pressed
+            if state == State.ATTRACT:
+                state = State.STANDBY
+                just_went_standby = True
+            elif state == State.STANDBY:
+                state = State.ATTRACT
+            else:
+                state = state + 1
+                reset_fade()
+        elif (event.pressed) & (event.key_number == KEY_BBUTTON):
+            state = State.SPIRAL
+
+    if state == State.STANDBY and just_went_standby:
         matrix.fill(Color.OFF)
+        matrix.display()
         audio.stop()
+        reset_fade()
+        just_went_standby = False
 
     elif state == State.SPIRAL:
         matrix.auto_write = True
+        matrix.fill(Color.OFF)
+        matrix.display()
         end_color = colors[random.randint(1, 6)]
+        # print(f"{end_color:#x}")
         frame = []
         for i in range(NUM_PIXELS):
             frame.append(colors[random.randint(1, 6)])
         # set middle 4 to end color
-        frame[math.floor((ROWS-1)/2) * 16 + math.floor((COLS-1)/2)] = end_color
-        frame[math.floor((ROWS-1)/2) * 16 +
+        frame[(math.floor((ROWS-1)/2) * 16) + math.floor((COLS-1)/2)] = end_color
+        frame[(math.floor((ROWS-1)/2) * 16) +
               math.floor((COLS-1)/2) + 1] = end_color
-        frame[(math.floor((ROWS-1)/2) + 1) * 16 +
+        frame[((math.floor((ROWS-1)/2) + 1) * 16) +
               math.floor((COLS-1)/2)] = end_color
-        frame[(math.floor((ROWS-1)/2) + 1) * 16 +
-              math.floor((COLS-1)/2) + 1] = end_color
+        frame[((math.floor((ROWS-1)/2) + 1) * 16) +
+              math.floor((COLS-1)/2) + 1] = end_color    
+
+        try:
+            decoder = audiomp3.MP3Decoder(open("spiral.mp3", "rb"))
+        except:
+            pass
 
         xmin = 0
         xmax = COLS-1
@@ -144,13 +198,18 @@ while 1:
         xsrc = 0
         ysrc = 0
         direction = 0
-
+        try:
+            audio.play(decoder)
+        except:
+            pass
         for src in range(len(frame)):
             matrix.pixel(xsrc, ysrc, frame[src])
+            matrix.display()
+            # print((xsrc, ysrc))
             if direction == 0:      # go right
                 xsrc += 1
-            if xsrc == xmax:
-                direction += 1
+                if xsrc == xmax:
+                    direction += 1
             elif direction == 1:    # go down
                 ysrc += 1
                 if ysrc == ymax:
@@ -174,93 +233,75 @@ while 1:
             time.sleep(SPIRAL_TIME)
 
         xmin = math.floor((ROWS-1)/2)
-        xmax = math.floor((ROWS-1)/2) + 1
+        xmax = math.floor((ROWS-1)/2) + 2
         ymin = math.floor((COLS-1)/2)
-        ymax = math.floor((COLS-1)/2) + 1
+        ymax = math.floor((COLS-1)/2) + 2
 
         matrix.auto_write = False
         while xmin >= 0:
+            for x, y in product(range(xmin, xmax), range(ymin, ymax)):
+                matrix.pixel(x, y, end_color)
+
+            matrix.display()
+
             xmin -= 1
             xmax += 1
             ymin -= 1
             ymax += 1
 
-            for y in range(ymin, ymax):
-                for x in range(xmin, xmax):
-                    matrix.pixel(x, y, end_color)
-
-            matrix.display()
             time.sleep(SPIRAL_EXPAND_TIME)
+        # time out after 3 * 60 * 1000 ms = 3 minutes
+        spiral_timeout = ticks_add(supervisor.ticks_ms(), 180_000)
         state = State.SPIRAL_END
 
     elif state == State.SPIRAL_END:
-        if event.pressed & event.key_number == KEY_BBUTTON:
+        audio.stop()
+        if event and event.pressed & event.key_number == KEY_BBUTTON:
             state = State.SPIRAL
+        if ticks_less(spiral_timeout, supervisor.ticks_ms()):
+            state = State.ATTRACT
+            select_new_flash = True
 
     elif state == State.ATTRACT:
-        if event.pressed & event.key_number == KEY_BBUTTON:
+        if event and event.pressed & event.key_number == KEY_BBUTTON:
             state = State.SPIRAL
         # select random x, y, color
         if select_new_flash:
+            # print(loop_speed)
+            # loop_speed.clear()
+            matrix.fill(Color.OFF)
+            matrix.display()
+            select_new_flash = False
+            # print("new flash")
             coords = (random.randint(2, ROWS-2), random.randint(2, COLS-2))
             fade_size = random.randint(0, 2)
+            # print(fade_size)
             fade_color = colors[random.randint(1, 6)]
             current_fade_percentage = 0
             reverse_fade = False
-            fade_pixels = list((range(coords[0] - fade_size, coords[0] + fade_size), range(
-                coords[1] - fade_size, coords[1] + fade_size)))
+            fade_pixels = list((range(coords[0] - fade_size, coords[0] + fade_size + 1), range(
+                coords[1] - fade_size, coords[1] + fade_size + 1))) if fade_size >= 1 else [[coords[0]], [coords[1]]]
+            next_fade_update = supervisor.ticks_ms()
+            # print((next_fade_update, supervisor.ticks_ms()))
 
         # fade in and out over ATTRACT_FADE_TIME seconds
-
-        for x in fade_pixels[0]:
-            for y in fade_pixels[1]:
+        if ticks_less(next_fade_update, supervisor.ticks_ms()):
+            for x, y in product(fade_pixels[0], fade_pixels[1]):
                 matrix.pixel(x, y, set_brightness(
-                    fade_color, current_fade_percentage))
+                    fade_color, current_fade_percentage/100))
+            matrix.display()
 
-        if current_fade_percentage < 1:
+            # if current_fade_percentage < 1:
             current_fade_percentage += fade_percentage_increment
-        elif current_fade_percentage == 1:
-            reverse_fade = True
-            fade_percentage_increment = -fade_percentage_increment
+            if current_fade_percentage >= 100:
+                reverse_fade = True
+                fade_percentage_increment = -fade_percentage_increment
 
-        if reverse_fade and current_fade_percentage == 0:
-            reverse_fade = False
-            fade_percentage_increment = -fade_percentage_increment
-            select_new_flash = True
-
-        time.sleep(ATTRACT_FADE_TIME / 100)
-
-    elif state == State.ATTRACT_SILENT:
-        if event.pressed & event.key_number == KEY_BBUTTON:
-            state = State.SPIRAL
-        if select_new_flash:
-            coords = (random.randint(2, ROWS-2), random.randint(2, COLS-2))
-            fade_size = random.randint(0, 2)
-            fade_color = colors[random.randint(1, 6)]
-            current_fade_percentage = 0
-            reverse_fade = False
-            fade_pixels = list((range(coords[0] - fade_size, coords[0] + fade_size), range(
-                coords[1] - fade_size, coords[1] + fade_size)))
-
-        # fade in and out over ATTRACT_FADE_TIME seconds
-
-        for x in fade_pixels[0]:
-            for y in fade_pixels[1]:
-                matrix.pixel(x, y, set_brightness(
-                    fade_color, current_fade_percentage))
-
-        if current_fade_percentage < 1:
-            current_fade_percentage += fade_percentage_increment
-        elif current_fade_percentage == 1:
-            reverse_fade = True
-            fade_percentage_increment = -fade_percentage_increment
-
-        if reverse_fade and current_fade_percentage == 0:
-            reverse_fade = False
-            fade_percentage_increment = -fade_percentage_increment
-            select_new_flash = True
-
-        time.sleep(ATTRACT_FADE_TIME / 100)
+            if reverse_fade and current_fade_percentage <= 0:
+                reverse_fade = False
+                fade_percentage_increment = -fade_percentage_increment
+                select_new_flash = True
+            next_fade_update = ticks_add(supervisor.ticks_ms(), 30)
 
     else:
         state = State.STANDBY
