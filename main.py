@@ -1,4 +1,4 @@
-# pylint: disable=C0114,C0115,C0116,R0903,C0200,C0103,W0603,W0702
+# pylint: disable=C0114,C0115,C0116,R0903,C0200,C0103,W0603,W0702,C0321
 
 # 256 ────────────────┐241
 # 225┌────────────────┘240
@@ -37,6 +37,7 @@ import keypad
 import supervisor
 from adafruit_itertools import product
 
+DEBUG = False
 
 TICKS_PERIOD = 1 << 29  # supervisor.ticks_ms() overflows after 2^29 ms
 TICKS_MAX = TICKS_PERIOD - 1
@@ -111,16 +112,21 @@ reverse_fade = False
 spiral_timeout = -1
 next_fade_update = -1
 
+fade_pixels = []
+fade_color = Color.OFF
+
 
 def reset_fade():
     global select_new_flash
     global current_fade_percentage
-    global fade_percentage_increment
     global reverse_fade
+    global fade_pixels
+    global fade_color
     select_new_flash = True
     current_fade_percentage = 0
-    fade_percentage_increment = 2
     reverse_fade = False
+    fade_pixels = []
+    fade_color = Color.OFF
 
 
 def ticks_add(ticks, delta):
@@ -146,7 +152,7 @@ while 1:
     event = keys.events.get()
 
     if event:
-        print(event)
+        if DEBUG: print(event)
 
         if (event.pressed) & (event.key_number == KEY_ACC):
             # accessory button pressed
@@ -173,7 +179,7 @@ while 1:
         matrix.fill(Color.OFF)
         matrix.display()
         end_color = colors[random.randint(1, 6)]
-        # print(f"{end_color:#x}")
+        if DEBUG: print(f"{end_color:#x}")
         frame = []
         for i in range(NUM_PIXELS):
             frame.append(colors[random.randint(1, 6)])
@@ -205,7 +211,7 @@ while 1:
         for src in range(len(frame)):
             matrix.pixel(xsrc, ysrc, frame[src])
             matrix.display()
-            # print((xsrc, ysrc))
+            if DEBUG: print((xsrc, ysrc))
             if direction == 0:      # go right
                 xsrc += 1
                 if xsrc == xmax:
@@ -260,29 +266,27 @@ while 1:
             state = State.SPIRAL
         if ticks_less(spiral_timeout, supervisor.ticks_ms()):
             state = State.ATTRACT
-            select_new_flash = True
+            reset_fade()
 
     elif state == State.ATTRACT:
         if event and event.pressed & event.key_number == KEY_BBUTTON:
             state = State.SPIRAL
         # select random x, y, color
         if select_new_flash:
-            # print(loop_speed)
-            # loop_speed.clear()
             matrix.fill(Color.OFF)
             matrix.display()
             select_new_flash = False
-            # print("new flash")
+            if DEBUG: print("new flash")
             coords = (random.randint(2, ROWS-2), random.randint(2, COLS-2))
             fade_size = random.randint(0, 2)
-            # print(fade_size)
+            if DEBUG: print(fade_size)
             fade_color = colors[random.randint(1, 6)]
             current_fade_percentage = 0
             reverse_fade = False
             fade_pixels = list((range(coords[0] - fade_size, coords[0] + fade_size + 1), range(
                 coords[1] - fade_size, coords[1] + fade_size + 1))) if fade_size >= 1 else [[coords[0]], [coords[1]]]
             next_fade_update = supervisor.ticks_ms()
-            # print((next_fade_update, supervisor.ticks_ms()))
+            if DEBUG: print((next_fade_update, supervisor.ticks_ms()))
 
         # fade in and out over ATTRACT_FADE_TIME seconds
         if ticks_less(next_fade_update, supervisor.ticks_ms()):
@@ -291,15 +295,12 @@ while 1:
                     fade_color, current_fade_percentage/100))
             matrix.display()
 
-            # if current_fade_percentage < 1:
-            current_fade_percentage += fade_percentage_increment
+            current_fade_percentage = current_fade_percentage + fade_percentage_increment if not reverse_fade else current_fade_percentage - fade_percentage_increment
             if current_fade_percentage >= 100:
                 reverse_fade = True
-                fade_percentage_increment = -fade_percentage_increment
 
             if reverse_fade and current_fade_percentage <= 0:
                 reverse_fade = False
-                fade_percentage_increment = -fade_percentage_increment
                 select_new_flash = True
             next_fade_update = ticks_add(supervisor.ticks_ms(), 30)
 
