@@ -10,6 +10,7 @@ import digitalio
 import displayio
 import neopixel
 import neomatrix
+import os
 import keypad
 import supervisor
 from adafruit_itertools import product
@@ -27,9 +28,13 @@ COLOR_TRANSPARENT = 0x0000FF
 
 YEAR = 2026
 
-dino_files = ["dino0.bmp", "dino1.bmp", "dino2.bmp", "dino3.bmp",
-              "dino4.bmp", "dino5.bmp", "dino6.bmp", "dino7.bmp", "dino8.bmp"]
+# dino_files = ["dino0.bmp", "dino1.bmp", "dino2.bmp", "dino3.bmp",
+#               "dino4.bmp", "dino5.bmp", "dino6.bmp", "dino7.bmp", "dino8.bmp"]
+
+# 0 1 3 4 6 8
+
 dino_files_path = "dinos/"
+dino_files = os.listdir(dino_files_path)
 
 
 class Color:
@@ -48,9 +53,10 @@ colors = [Color.OFF, Color.RED, Color.ORANGE,
 
 class State:
     STANDBY = 0
-    SPIRAL = 1
-    SPIRAL_END = 2
+    START_DINO = 1
+    DINO_END = 2
     ATTRACT = 3
+
 
 
 SPIRAL_TIME = 0.01
@@ -97,7 +103,7 @@ current_fade_percentage = 0
 fade_percentage_increment = 2
 reverse_fade = False
 
-spiral_timeout = -1
+dino_timeout = -1
 next_fade_update = -1
 
 fade_pixels = []
@@ -132,34 +138,143 @@ def get_transparent_index(palette):
     return -1
 
 
+def reset_fade():
+    global select_new_flash
+    global current_fade_percentage
+    global reverse_fade
+    global fade_pixels
+    global fade_color
+    select_new_flash = True
+    current_fade_percentage = 0
+    reverse_fade = False
+    fade_pixels = []
+    fade_color = Color.OFF
+
+
 while 1:
 
     event = keys.events.get()
 
     if event:
-        if DEBUG:
-            print(event)
+        if DEBUG: print(event)
 
-        if (event.pressed) & (event.key_number == KEY_ACC):
-            if selected_dino == 8:
-                selected_dino = 0
+        if (event.pressed) and (event.key_number == KEY_ACC):
+            if state == State.ATTRACT:
+                state = State.STANDBY
+                just_went_standby = True
+            elif state == State.STANDBY:
+                state = State.ATTRACT
             else:
-                selected_dino += 1
-            just_selected_new_dino = True
+                state = state + 1
+                reset_fade()
+            if DEBUG: print(state)
+        elif (event.pressed) & (event.key_number == KEY_BBUTTON):
+            state = State.START_DINO
 
-    if just_selected_new_dino:
-        file = open(dino_files_path+dino_files[selected_dino], "rb")
+        # if (event.pressed) & (event.key_number == KEY_ACC):
+        #     if selected_dino == 8:
+        #         selected_dino = 0
+        #     else:
+        #         selected_dino += 1
+        #     if DEBUG: print(f"dino #{selected_dino} selected")
+        #     just_selected_new_dino = True
 
-        image, palette = adafruit_imageload.load(file, bitmap=displayio.Bitmap, palette=displayio.Palette)
-        file.close()
+        # if (event.pressed) & (event.key_number == KEY_BBUTTON):
+        #     matrix.fill(Color.OFF)
+        #     matrix.display()
+        #     selected_dino = 0
+
+    if state == State.STANDBY and just_went_standby:
+        matrix.fill(Color.OFF)
+        matrix.display()
+        audio.stop()
+        reset_fade()
+        just_went_standby = False
+
+    elif state == State.START_DINO:
+        matrix.auto_write = True
+        matrix.fill(Color.OFF)
+        matrix.display()
+        dino_filename = dino_files[random.randint(0, len(dino_files)-1)]
+        if DEBUG: print(f"{dino_filename} selected")
+
+        with open(dino_files_path + dino_filename, "rb") as dino_file:
+            image, palette = adafruit_imageload.load(
+                dino_file, bitmap=displayio.Bitmap, palette=displayio.Palette)
         transparent_index = get_transparent_index(palette)
         if transparent_index > -1:
             palette[transparent_index] = Color.OFF
-            
+
+        # todo: display wipe
+
         matrix.auto_write = False
-        for x,y in product(range(0,16), range(0,16)):
-            color = palette[image[x,y]]
-            matrix.pixel(x,y,color)
+        for x, y in product(range(0, 16), range(0, 16)):
+            matrix.pixel(x, y, palette[image[x, y]])
         matrix.display()
 
-    
+        # time out after 3 minutes and go back to attract mode
+        dino_timeout = ticks_add(supervisor.ticks_ms(), 180_000)
+        state = State.DINO_END
+
+    elif state == State.DINO_END:
+        audio.stop()
+        if event and event.pressed & event.key_number == KEY_BBUTTON:
+            state = State.START_DINO
+        if ticks_less(dino_timeout, supervisor.ticks_ms()):
+            state = State.ATTRACT
+            reset_fade()
+
+    elif state == State.ATTRACT:
+        if event and event.pressed & event.key_number == KEY_BBUTTON:
+            state = State.START_DINO
+        # select random x, y, color
+        if select_new_flash:
+            matrix.fill(Color.OFF)
+            matrix.display()
+            select_new_flash = False
+            if DEBUG: print("new flash")
+            coords = (random.randint(2, ROWS-2), random.randint(2, COLS-2))
+            fade_size = random.randint(0, 2)
+            if DEBUG: print(f"fade_size: {fade_size}")
+            fade_color = colors[random.randint(1, 6)]
+            if DEBUG: print(f"fade_color: {fade_color}")
+            current_fade_percentage = 0
+            reverse_fade = False
+            fade_pixels = list((range(coords[0] - fade_size, coords[0] + fade_size + 1), range(
+                coords[1] - fade_size, coords[1] + fade_size + 1))) if fade_size >= 1 else [[coords[0]], [coords[1]]]
+            next_fade_update = supervisor.ticks_ms()
+            if DEBUG: print(f"next update, current_time: {(next_fade_update, supervisor.ticks_ms())}")
+
+        # fade in and out over ATTRACT_FADE_TIME seconds
+        if ticks_less(next_fade_update, supervisor.ticks_ms()):
+            for x, y in product(fade_pixels[0], fade_pixels[1]):
+                matrix.pixel(x, y, set_brightness(
+                    fade_color, current_fade_percentage/100))
+            matrix.display()
+
+            current_fade_percentage = current_fade_percentage + \
+                fade_percentage_increment if not reverse_fade else current_fade_percentage - \
+                fade_percentage_increment
+            if current_fade_percentage >= 100:
+                reverse_fade = True
+
+            if reverse_fade and current_fade_percentage <= 0:
+                reverse_fade = False
+                select_new_flash = True
+            next_fade_update = ticks_add(supervisor.ticks_ms(), 30)
+
+    # if just_selected_new_dino:
+    #     just_selected_new_dino = False
+    #     file = open(dino_files_path+dino_files[selected_dino], "rb")
+
+    #     image, palette = adafruit_imageload.load(file, bitmap=displayio.Bitmap, palette=displayio.Palette)
+    #     file.close()
+    #     transparent_index = get_transparent_index(palette)
+    #     if transparent_index > -1:
+    #         palette[transparent_index] = Color.OFF
+
+    #     matrix.auto_write = False
+    #     for x,y in product(range(0,16), range(0,16)):
+    #         color = palette[image[x,y]]
+    #         matrix.pixel(x,y,color)
+    #     matrix.display()
