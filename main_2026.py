@@ -2,9 +2,9 @@
 
 import time
 import random
-import math
 import board
-import audiomp3
+import audiocore
+import audiomixer
 import audiopwmio
 import digitalio
 import displayio
@@ -31,10 +31,11 @@ YEAR = 2026
 # dino_files = ["dino0.bmp", "dino1.bmp", "dino2.bmp", "dino3.bmp",
 #               "dino4.bmp", "dino5.bmp", "dino6.bmp", "dino7.bmp", "dino8.bmp"]
 
-# 0 1 3 4 6 8
-
 dino_files_path = "dinos/"
 dino_files = os.listdir(dino_files_path)
+
+audio_path = "audio/"
+audio_files = os.listdir(audio_path)
 
 
 class Color:
@@ -93,6 +94,9 @@ matrixType = (neomatrix.NEO_MATRIX_BOTTOM + neomatrix.NEO_MATRIX_LEFT +
 matrix = neomatrix.NeoMatrix(pixels, ROWS, COLS, 1, 1, matrixType, rotation=0)
 
 audio = audiopwmio.PWMAudioOut(AUDIO_PIN)
+
+mixer = audiomixer.Mixer(voice_count=1, sample_rate=16000, channel_count=1, bits_per_sample=16, samples_signed=True)
+audio.play(mixer)
 
 state = State.STANDBY
 
@@ -187,16 +191,21 @@ while 1:
     if state == State.STANDBY and just_went_standby:
         matrix.fill(Color.OFF)
         matrix.display()
-        audio.stop()
         reset_fade()
         just_went_standby = False
 
     elif state == State.START_DINO:
-        matrix.auto_write = True
-        matrix.fill(Color.OFF)
-        matrix.display()
         dino_filename = dino_files[random.randint(0, len(dino_files)-1)]
         if DEBUG: print(f"{dino_filename} selected")
+
+        sound_filename = audio_files[random.randint(0, len(audio_files)-1)]
+        #sound_filename = "roar.wav"
+        if DEBUG: print(f"{sound_filename} selected")
+
+        try:
+            decoder = audiocore.WaveFile(audio_path + sound_filename)
+        except:
+            pass
 
         with open(dino_files_path + dino_filename, "rb") as dino_file:
             image, palette = adafruit_imageload.load(
@@ -205,19 +214,35 @@ while 1:
         if transparent_index > -1:
             palette[transparent_index] = Color.OFF
 
-        # todo: display wipe
-
+        # wipe w/ solid color
         matrix.auto_write = False
-        for x, y in product(range(0, 16), range(0, 16)):
-            matrix.pixel(x, y, palette[image[x, y]])
-        matrix.display()
+        wipe_color = colors[random.randint(1,6)]
+        for y in range(0,16):
+            for x in range(0,16):
+                matrix.pixel(x,y,wipe_color)
+            matrix.display()
+            time.sleep(0.05)
+
+        # then wipe away to reveal and play sound effect
+        try:
+            mixer.play(decoder)
+        except:
+            pass
+
+        for y in range(0,16):
+            for x in range(0,16):
+                matrix.pixel(x,y,palette[image[x,y]])
+            matrix.display()
+            time.sleep(0.05)
 
         # time out after 3 minutes and go back to attract mode
         dino_timeout = ticks_add(supervisor.ticks_ms(), 180_000)
         state = State.DINO_END
 
+        # clear out event queue so spamming the button doesn't work
+        keys.events.clear()
+
     elif state == State.DINO_END:
-        audio.stop()
         if event and event.pressed & event.key_number == KEY_BBUTTON:
             state = State.START_DINO
         if ticks_less(dino_timeout, supervisor.ticks_ms()):
