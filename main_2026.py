@@ -175,19 +175,6 @@ while 1:
         elif (event.pressed) & (event.key_number == KEY_BBUTTON):
             state = State.START_DINO
 
-        # if (event.pressed) & (event.key_number == KEY_ACC):
-        #     if selected_dino == 8:
-        #         selected_dino = 0
-        #     else:
-        #         selected_dino += 1
-        #     if DEBUG: print(f"dino #{selected_dino} selected")
-        #     just_selected_new_dino = True
-
-        # if (event.pressed) & (event.key_number == KEY_BBUTTON):
-        #     matrix.fill(Color.OFF)
-        #     matrix.display()
-        #     selected_dino = 0
-
     if state == State.STANDBY and just_went_standby:
         matrix.fill(Color.OFF)
         matrix.display()
@@ -287,19 +274,3 @@ while 1:
                 reverse_fade = False
                 select_new_flash = True
             next_fade_update = ticks_add(supervisor.ticks_ms(), 30)
-
-    # if just_selected_new_dino:
-    #     just_selected_new_dino = False
-    #     file = open(dino_files_path+dino_files[selected_dino], "rb")
-
-    #     image, palette = adafruit_imageload.load(file, bitmap=displayio.Bitmap, palette=displayio.Palette)
-    #     file.close()
-    #     transparent_index = get_transparent_index(palette)
-    #     if transparent_index > -1:
-    #         palette[transparent_index] = Color.OFF
-
-    #     matrix.auto_write = False
-    #     for x,y in product(range(0,16), range(0,16)):
-    #         color = palette[image[x,y]]
-    #         matrix.pixel(x,y,color)
-    #     matrix.display()
