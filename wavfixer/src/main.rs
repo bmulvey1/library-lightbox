@@ -1,3 +1,4 @@
+use core::error;
 use std::env;
 use std::error::Error;
 use std::fs;
@@ -6,7 +7,7 @@ use std::process;
 fn main() {
     let args: Vec<String> = env::args().collect();
 
-    let config: Config = Config::build(&args).unwrap_or_else(|err| {
+    let config: Config = Config::build(&args).unwrap_or_else(|err: &str| {
         eprintln!("Problem parsing arguments: {err}");
         process::exit(1);
     });
@@ -20,6 +21,8 @@ fn main() {
 fn run(config: Config) -> Result<(), Box<dyn Error>> {
     let path: String = config.file_path;
     let mut contents: Vec<u8> = fs::read(path.clone())?;
+    let mut errors: u32 = 0;
+    let mut error_strings: Vec<String> = vec![];
     let first_four: &[u8] = &contents[0..4];
     let third_four: &[u8] = &contents[8..12];
     let riff_id: [u8; 4] = [0x52, 0x49, 0x46, 0x46];
@@ -29,39 +32,78 @@ fn run(config: Config) -> Result<(), Box<dyn Error>> {
         return Err("File is not a WAV file")?;
     }
 
-    // format chunk lives at bytes 12-35
-    let format_chunk: &[u8] = &contents[12..36];
+    let mut current_location: usize = 12;
+    let mut found_format: bool = false;
+    while !found_format {
+        if &contents[current_location..current_location + 4] == [0x66, 0x6D, 0x74, 0x20] {
+            found_format = true;
+        } else {
+            let chunk_size: usize = u32::from_le_bytes(
+                contents[current_location + 4..current_location + 8]
+                    .try_into()
+                    .unwrap(),
+            ) as usize;
+            current_location = current_location + chunk_size + 8;
+        }
+    }
+    let format_chunk_size: usize = u32::from_le_bytes(
+        contents[current_location + 4..current_location + 8]
+            .try_into()
+            .unwrap(),
+    ) as usize;
+
+    // format chunk should live at bytes 12-35
+    let format_chunk: &[u8] = &contents[current_location..current_location + format_chunk_size + 8];
+
+    println!("found format chunk at 0x{current_location:x}");
 
     if format_chunk[0..4] != [0x66, 0x6D, 0x74, 0x20] {
-        return Err("WAV file has unexpected format")?;
+        error_strings.push(format!("WAV file has unexpected format"));
+        errors += 1;
+
+        //return Err("WAV file has unexpected format")?;
     }
 
-    // this should probably return multiple errors at once rather than failing one test at a time
-
     if format_chunk[10..12] != [0x01, 0x00] {
-        return Err(format!(
+        error_strings.push(format!(
             "WAV file has wrong channel count (was {}, should be 1)",
             u16::from_le_bytes(format_chunk[10..12].try_into().unwrap())
-        ))?;
+        ));
+        errors += 1;
+        // return Err(format!(
+        //     "WAV file has wrong channel count (was {}, should be 1)",
+        //     u16::from_le_bytes(format_chunk[10..12].try_into().unwrap())
+        // ))?;
     }
 
     if format_chunk[12..16] != [0x80, 0x3e, 0x00, 0x00] {
-        return Err(format!(
+        error_strings.push(format!(
             "WAV file has wrong sample rate (was {} Hz, should be 16000 Hz)",
             u32::from_le_bytes(format_chunk[12..16].try_into().unwrap())
-        ))?;
+        ));
+        errors += 1;
+        // return Err(format!(
+        //     "WAV file has wrong sample rate (was {} Hz, should be 16000 Hz)",
+        //     u32::from_le_bytes(format_chunk[12..16].try_into().unwrap())
+        // ))?;
     }
 
     if format_chunk[22..24] != [0x10, 0x00] {
-        return Err(format!(
+        error_strings.push(format!(
             "WAV file has wrong bits per sample setting (was {} bits per sample, should be 16 bits per sample)",
             u16::from_le_bytes(format_chunk[22..24].try_into().unwrap())
-        ))?;
+        ));
+        errors += 1;
+        // return Err(format!(
+        //     "WAV file has wrong bits per sample setting (was {} bits per sample, should be 16 bits per sample)",
+        //     u16::from_le_bytes(format_chunk[22..24].try_into().unwrap())
+        // ))?;
     }
-
+    if errors != 0 {
+        return Err(format!("{} errors: \n{}", errors, error_strings.join("\n")))?;
+    }
     println!("WAV file has correct format");
 
-    let mut current_location: usize = 36;
     let mut found_data: bool = false;
     while !found_data {
         if &contents[current_location..current_location + 4] == [0x64, 0x61, 0x74, 0x61] {
@@ -109,7 +151,7 @@ fn run(config: Config) -> Result<(), Box<dyn Error>> {
     // println!("new last sample: {:x?}", new_last_sample);
 
     let split_path: Vec<_> = path.split(".wav").collect();
-    let new_path = format!("{}_new.wav", split_path[0]);
+    let new_path: String = format!("{}_new.wav", split_path[0]);
     println!("Path to new WAV file: {new_path}");
 
     fs::write(new_path, contents)?;
